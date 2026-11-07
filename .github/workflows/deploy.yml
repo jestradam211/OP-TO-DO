@@ -1,8 +1,8 @@
-name: Deploy Next.js (estático) a EC2 + S3
+name: Deploy Next.js (HTML en EC2 + _next en S3)
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -18,32 +18,35 @@ jobs:
 
       - run: npm ci
 
-      - name: Build con assetPrefix hacia S3
+      # 1) Build con la URL del bucket
+      - name: Build
         run: npm run build
         env:
-          ASSET_PREFIX: https://${{ secrets.S3_BUCKET }}.s3.us-east-1.amazonaws.com
+          NEXT_PUBLIC_ASSET_PREFIX: https://${{ secrets.S3_BUCKET }}.s3.amazonaws.com
 
-      - name: Configurar credenciales de AWS
-        uses: aws-actions/configure-aws-credentials@v6
+      # 2a) Credenciales temporales del Learner Lab
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
-      - name: Subir estáticos (_next) a S3
-        run: |
-          aws s3 sync ./out/_next s3://${{ secrets.S3_BUCKET }}/_next \
-            --cache-control "public,max-age=31536000,immutable"
+      # 2b) Subir _next/ a S3
+      - name: Subir _next a S3
+        run: aws s3 sync out/_next "s3://${{ secrets.S3_BUCKET }}/_next" --delete
 
-      - name: Configurar SSH
+      - name: Preparar llave SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/key.pem
-          chmod 600 ~/.ssh/key.pem
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Copiar HTML y el resto a EC2 (sin _next)
+      # 3) rsync del HTML, SIN _next/
+      - name: Copiar HTML a la EC2
         run: |
-          rsync -avz --delete --exclude '_next/' -e "ssh -i ~/.ssh/key.pem" \
-            ./out/ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/html/
+          rsync -avz --delete --exclude '_next/' \
+            -e "ssh -i ~/.ssh/ec2.pem" \
+            out/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/html/"
